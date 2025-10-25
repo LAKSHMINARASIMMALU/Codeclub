@@ -1,0 +1,237 @@
+/**
+ * @fileoverview Firestore Security Rules for CodeQuest Arena.
+ *
+ * Core Philosophy:
+ * This ruleset enforces a strict user-ownership model for user-specific data
+ * and a closed-collaboration model for shared resources like contests. Admin
+ * privileges are granted based on the existence of a document in a special
+ * roles collection.
+ *
+ * Data Structure:
+ * - /users/{userId}: Stores personal user data, proctoring logs, and submissions.
+ * - /contests/{contestId}: Stores contest data, including a list of participating user IDs.
+ * - /contests/{contestId}/levels/{levelId}: Stores level data within a contest.
+ * - /contests/{contestId}/levels/{levelId}/questions/{questionId}: Stores question data within a level.
+ * - /leaderboard/{leaderboardEntryId}: Stores leaderboard entries, including user and contest IDs.
+ * - /roles_admin/{userId}: Indicates admin privileges; document existence grants admin access.
+ *
+ * Key Security Decisions:
+ * - Users can only access their own user document and associated subcollections.
+ * - Contests are accessible to users listed in the contest's `userIds` array.
+ * - Admin privileges are determined by the presence of a document in the `/roles_admin/{userId}` collection.
+ * - Listing of user documents is disallowed to prevent enumeration.
+ *
+ * Denormalization for Authorization:
+ * - Contests denormalize user IDs into the `userIds` array for efficient authorization checks.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /**
+     * @description Checks if the user is signed in.
+     * @path N/A
+     * @allow N/A
+     * @deny N/A
+     * @principle Verifies user authentication.
+     */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /**
+     * @description Checks if the authenticated user's UID matches the provided userId.
+     * @path N/A
+     * @allow N/A
+     * @deny N/A
+     * @principle Enforces user ownership based on UID matching.
+     */
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    /**
+     * @description Checks if the authenticated user's UID matches the provided userId and the resource exists.
+     * @path N/A
+     * @allow N/A
+     * @deny N/A
+     * @principle Enforces user ownership based on UID matching and verifies resource existence.
+     */
+    function isExistingOwner(userId) {
+        return isOwner(userId) && resource != null;
+    }
+
+    /**
+     * @description Checks if the user is an admin based on the existence of a document in /roles_admin/{uid}.
+     * @path N/A
+     * @allow N/A
+     * @deny N/A
+     * @principle Grants admin privileges based on document existence in a roles collection.
+     */
+    function isAdmin() {
+        return exists(/databases/$(database)/documents/roles_admin/$(request.auth.uid));
+    }
+
+    /**
+     * @description Grants read and write access to the contest if the user is a participant.
+     * @path N/A
+     * @allow N/A
+     * @deny N/A
+     */
+    function isContestParticipant(contestId) {
+        return isSignedIn() && request.auth.uid in get(/databases/$(database)/documents/contests/$(contestId)).data.userIds;
+    }
+
+    /**
+     * @description Rules for user profiles.
+     * @path /users/{userId}
+     * @allow (create) User A creates their profile with matching UID.
+     * @allow (get) User A reads their own profile.
+     * @allow (update) User A updates their own profile.
+     * @allow (delete) User A deletes their own profile.
+     * @deny (create) User A creates a profile with a mismatched UID.
+     * @deny (get) User A reads User B's profile.
+     * @deny (update) User A updates User B's profile.
+     * @deny (delete) User A deletes User B's profile.
+     * @principle Enforces document ownership for writes and reads.
+     */
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow create: if isOwner(userId) && request.resource.data.id == userId;
+      allow update: if isExistingOwner(userId) && request.resource.data.id == resource.data.id;
+      allow delete: if isExistingOwner(userId);
+    }
+
+    /**
+     * @description Rules for contests.
+     * @path /contests/{contestId}
+     * @allow (get) Any user can read contest details.
+     * @allow (list) Any user can list contests.
+     * @allow (create) Only admins can create contests.
+     * @allow (update) Only admins can update contests.
+     * @allow (delete) Only admins can delete contests.
+     * @deny (create) Non-admins cannot create contests.
+     * @principle Restricts write access to admins.
+     */
+    match /contests/{contestId} {
+      allow get, list: if true;
+      allow create: if isAdmin();
+      allow update: if isAdmin() && resource != null;
+      allow delete: if isAdmin() && resource != null;
+    }
+
+    /**
+     * @description Rules for levels within a contest.
+     * @path /contests/{contestId}/levels/{levelId}
+     * @allow (get) Participants of the contest can read level details.
+     * @allow (list) Participants of the contest can list levels.
+     * @allow (create) Only admins can create levels.
+     * @allow (update) Only admins can update levels.
+     * @allow (delete) Only admins can delete levels.
+     * @deny (create) Non-admins cannot create levels.
+     * @principle Restricts write access to admins and read access to contest participants.
+     */
+    match /contests/{contestId}/levels/{levelId} {
+      allow get, list: if isContestParticipant(contestId);
+      allow create: if isAdmin();
+      allow update: if isAdmin() && resource != null;
+      allow delete: if isAdmin() && resource != null;
+    }
+
+    /**
+     * @description Rules for questions within a level.
+     * @path /contests/{contestId}/levels/{levelId}/questions/{questionId}
+     * @allow (get) Participants of the contest can read question details.
+     * @allow (list) Participants of the contest can list questions.
+     * @allow (create) Only admins can create questions.
+     * @allow (update) Only admins can update questions.
+     * @allow (delete) Only admins can delete questions.
+     * @deny (create) Non-admins cannot create questions.
+     * @principle Restricts write access to admins and read access to contest participants.
+     */
+    match /contests/{contestId}/levels/{levelId}/questions/{questionId} {
+      allow get, list: if isContestParticipant(contestId);
+      allow create: if isAdmin();
+      allow update: if isAdmin() && resource != null;
+      allow delete: if isAdmin() && resource != null;
+    }
+
+    /**
+     * @description Rules for user submissions.
+     * @path /users/{userId}/submissions/{submissionId}
+     * @allow (create) User A creates a submission under their own user ID.
+     * @allow (get) User A reads their own submission.
+     * @allow (list) User A lists their own submissions.
+     * @allow (update) User A updates their own submission.
+     * @allow (delete) User A deletes their own submission.
+     * @deny (create) User A creates a submission under User B's ID.
+     * @deny (get) User A reads User B's submission.
+     * @principle Enforces user ownership for submissions.
+     */
+    match /users/{userId}/submissions/{submissionId} {
+      allow get: if isOwner(userId);
+      allow list: if isOwner(userId);
+      allow create: if isOwner(userId) && request.resource.data.userId == userId;
+      allow update: if isExistingOwner(userId) && request.resource.data.userId == resource.data.userId;
+      allow delete: if isExistingOwner(userId);
+    }
+
+    /**
+     * @description Rules for proctoring logs.
+     * @path /users/{userId}/proctorLogs/{logId}
+     * @allow (create) User A creates a proctor log under their own user ID (unlikely, but included for completeness).
+     * @allow (get) User A reads their own proctor logs. Admins can also read.
+     * @allow (list) User A lists their own proctor logs. Admins can also list.
+     * @allow (update) User A updates their own proctor log (unlikely, but included for completeness).
+     * @allow (delete) User A deletes their own proctor log.
+     * @deny (create) User A creates a proctor log under User B's ID.
+     * @deny (get) User A reads User B's proctor logs.
+     * @principle Enforces user ownership for proctoring logs, with admin access.
+     */
+    match /users/{userId}/proctorLogs/{logId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId) && request.resource.data.userId == userId;
+      allow update: if isExistingOwner(userId) && request.resource.data.userId == resource.data.userId;
+      allow delete: if isExistingOwner(userId);
+    }
+
+    /**
+     * @description Rules for leaderboard entries.
+     * @path /leaderboard/{leaderboardEntryId}
+     * @allow (get) Any user can read leaderboard entries.
+     * @allow (list) Any user can list leaderboard entries.
+     * @allow (create) Only admins can create leaderboard entries.
+     * @allow (update) Only admins can update leaderboard entries.
+     * @allow (delete) Only admins can delete leaderboard entries.
+     * @deny (create) Non-admins cannot create leaderboard entries.
+     * @principle Restricts write access to admins, allows public read access.
+     */
+    match /leaderboard/{leaderboardEntryId} {
+      allow get, list: if true;
+      allow create: if isAdmin();
+      allow update: if isAdmin() && resource != null;
+      allow delete: if isAdmin() && resource != null;
+    }
+
+      /**
+       * @description Rules for admin role assignment.
+       * @path /roles_admin/{userId}
+       * @allow (create) Only admins can grant admin roles.
+       * @allow (get) Only admins can check for admin roles.
+       * @allow (list) Only admins can list admin roles (generally discouraged).
+       * @allow (update) Only admins can modify admin roles.
+       * @allow (delete) Only admins can revoke admin roles.
+       * @deny (create) Non-admins cannot grant admin roles.
+       * @principle Restricts role management to existing admins.
+       */
+      match /roles_admin/{userId} {
+        allow get: if isAdmin();
+        allow list: if isAdmin();
+        allow create: if isAdmin();
+        allow update: if isAdmin() && resource != null;
+        allow delete: if isAdmin() && resource != null;
+      }
+  }
+}

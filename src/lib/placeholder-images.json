@@ -1,0 +1,16 @@
+{
+  "placeholderImages": [
+    {
+      "id": "avatar-alex",
+      "description": "Avatar for Alex Doe",
+      "imageUrl": "https://i.pravatar.cc/150?u=alex.doe@example.com",
+      "imageHint": "person portrait"
+    },
+    {
+      "id": "avatar-admin",
+      "description": "Avatar for Admin",
+      "imageUrl": "https://i.pravatar.cc/150?u=admin@codequest.com",
+      "imageHint": "person portrait"
+    }
+  ]
+}
