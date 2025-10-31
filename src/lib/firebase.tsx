@@ -9,32 +9,35 @@ import { FirebaseErrorListener } from '@/components/FirebaseErrorListener';
 
 interface UserContextType {
   user: User | null;
+  firebaseUser: FirebaseUser | null;
   loading: boolean;
 }
 
-const UserContext = createContext<UserContextType>({ user: null, loading: true });
+const UserContext = createContext<UserContextType>({ user: null, firebaseUser: null, loading: true });
 
 export const useUser = () => useContext(UserContext);
 
 export function UserProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser: FirebaseUser | null) => {
-      if (firebaseUser) {
+    const unsubscribe = onAuthStateChanged(auth, async (fbUser: FirebaseUser | null) => {
+      setFirebaseUser(fbUser);
+      if (fbUser) {
         // User is signed in.
-        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        const userDocRef = doc(db, 'users', fbUser.uid);
         const userDoc = await getDoc(userDocRef);
         if (userDoc.exists()) {
-          setUser({ id: firebaseUser.uid, ...userDoc.data() } as User);
+          setUser({ id: fbUser.uid, ...userDoc.data() } as User);
         } else {
           // Handle case where user is authenticated but not in Firestore
           // This could be a new registration, or a data consistency issue
            setUser({
-            id: firebaseUser.uid,
-            email: firebaseUser.email || "",
-            name: firebaseUser.displayName || "User",
+            id: fbUser.uid,
+            email: fbUser.email || "",
+            name: fbUser.displayName || "User",
             role: 'student' // default role
            });
         }
@@ -49,7 +52,7 @@ export function UserProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <UserContext.Provider value={{ user, loading }}>
+    <UserContext.Provider value={{ user, firebaseUser, loading }}>
       <FirebaseErrorListener />
       {children}
     </UserContext.Provider>

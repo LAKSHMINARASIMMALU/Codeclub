@@ -16,7 +16,7 @@ import {
 import { LogOut, LayoutDashboard } from 'lucide-react';
 import { Skeleton } from './ui/skeleton';
 import { useUser } from '@/lib/firebase';
-import { signOut } from 'firebase/auth';
+import { signOut, User as FirebaseUser } from 'firebase/auth';
 import { auth } from '@/firebase/config';
 
 export function Header() {

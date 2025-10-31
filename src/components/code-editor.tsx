@@ -17,6 +17,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { useToast } from '@/hooks/use-toast';
 import Editor from "@monaco-editor/react";
 import axios from 'axios';
+import { useUser } from '@/lib/firebase';
 
 const languages: Record<string, { id: number; name: string }> = {
     'python': { id: 71, name: 'Python (3.8.1)' },
@@ -71,6 +72,8 @@ solve();
 
 const SUBMISSIONS_STORAGE_KEY = 'submissions';
 const TOTAL_SCORE_PER_QUESTION = 50;
+const BACKEND_URL = 'http://localhost:5000';
+
 
 type CodeEditorProps = {
   question: Question;
@@ -86,10 +89,6 @@ type TestResult = {
     error?: string | null;
 };
 
-// Construct the Cloud Function URL from environment variables
-const cloudFunctionUrl = `https://us-central1-${process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID}.cloudfunctions.net/evaluateCode`;
-
-
 export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
   const [language, setLanguage] = useState('python');
   const [code, setCode] = useState(defaultCode['python']);
@@ -99,6 +98,7 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { toast } = useToast();
+  const { firebaseUser } = useUser();
 
   useEffect(() => {
     setCode(defaultCode[language] || '');
@@ -108,28 +108,44 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
     setLanguage(lang);
   }
 
-  const runCodeWithCloudFunction = async (codeToRun: string, input: string) => {
+  const runCodeWithBackend = async (codeToRun: string, input: string, isSubmission: boolean) => {
+    if (!firebaseUser) {
+        toast({
+            variant: "destructive",
+            title: "Not Authenticated",
+            description: "You must be logged in to run or submit code.",
+        });
+        return { error: "Not Authenticated", output: null };
+    }
+    
     try {
-        const response = await axios.post(cloudFunctionUrl, {
-            languageId: languages[language].id,
-            sourceCode: codeToRun,
-            input: input,
-            userId: user.id,
-            contestId: contestId,
-            questionId: question.id,
-            questionTitle: question.title,
+        const token = await firebaseUser.getIdToken();
+        const payload: any = {
+            code: codeToRun,
+            language: language,
+            testInput: input,
+        };
+
+        if (isSubmission) {
+            payload.questionId = question.id;
+            payload.contestId = contestId;
+        }
+
+        const response = await axios.post(`${BACKEND_URL}/api/user/submit`, payload, {
+            headers: {
+                Authorization: `Bearer ${token}`
+            }
         });
 
-        const { result } = response.data;
-        if (result.status.id > 2) { // Not "In Queue" or "Processing"
-            const errorOutput = result.stderr || result.compile_output;
-            if (errorOutput) return { error: atob(errorOutput), output: null };
+        const { stdout, stderr, compile_output } = response.data;
+        if (stderr || compile_output) {
+            return { error: (stderr || compile_output), output: null };
         }
-        return { error: null, output: result.stdout ? atob(result.stdout) : '' };
+        return { error: null, output: stdout };
 
     } catch (error: any) {
-        console.error("Error calling cloud function:", error);
-        const errorMessage = error.response?.data?.details || error.response?.data?.error || 'Failed to execute code.';
+        console.error("Error executing code:", error);
+        const errorMessage = error.response?.data?.message || error.message || 'Failed to execute code.';
         return { error: errorMessage, output: null };
     }
   }
@@ -140,7 +156,7 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
     setActiveTab('output');
     setOutput(`Running code with sample input...\n\nInput:\n${question.inputSample}`);
     
-    const result = await runCodeWithCloudFunction(code, question.inputSample);
+    const result = await runCodeWithBackend(code, question.inputSample, false);
 
     if (result.error) {
       setOutput(`Execution failed:\n\n${result.error}`);
@@ -188,7 +204,7 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
       const results: TestResult[] = [];
       for (const tc of testCases) {
           const expectedOutput = String(tc.output).trim();
-          const result = await runCodeWithCloudFunction(code, String(tc.input));
+          const result = await runCodeWithBackend(code, String(tc.input), true);
           
           const actualOutput = result.output ? result.output.trim() : null;
           const passes = !result.error && actualOutput === expectedOutput;
@@ -236,27 +252,6 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
     } finally {
         setIsSubmitting(false);
     }
-
-    const newSubmission: Submission = {
-      id: `sub-${Date.now()}`,
-      userId: user.id,
-      userName: user.name,
-      contestId: contestId,
-      questionId: question.id,
-      questionTitle: question.title,
-      code: code,
-      language: language,
-      timestamp: new Date(),
-      status: submissionStatus,
-      score: calculatedScore,
-    };
-
-    // This now primarily relies on the cloud function saving to Firestore,
-    // but we can keep localStorage as a fallback or for quick UI updates.
-    const storedSubmissions = localStorage.getItem(SUBMISSIONS_STORAGE_KEY);
-    const submissions = storedSubmissions ? JSON.parse(storedSubmissions) : [];
-    submissions.push(newSubmission);
-    localStorage.setItem(SUBMISSIONS_STORAGE_KEY, JSON.stringify(submissions));
   }
 
 
@@ -363,5 +358,3 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
     </div>
   );
 }
-
-    

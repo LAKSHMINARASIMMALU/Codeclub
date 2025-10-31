@@ -16,170 +16,109 @@ import {
   type DocumentData,
   type Query,
 } from 'firebase/firestore';
-import { db } from '@/firebase/config';
+import { db, auth } from '@/firebase/config';
 import type { Contest } from './types';
 import { errorEmitter } from '@/firebase/error-emitter';
 import { FirestorePermissionError } from '@/firebase/errors';
+import axios from 'axios';
 
-const contestsCollection = collection(db, 'contests');
+const BACKEND_URL = 'http://localhost:5000';
+
+const getAuthHeader = async () => {
+    const user = auth.currentUser;
+    if (!user) throw new Error('User not authenticated');
+    const token = await user.getIdToken();
+    return { Authorization: `Bearer ${token}` };
+}
 
 /**
- * Converts a Firestore document to a Contest object.
- * @param {DocumentData} doc - The Firestore document.
- * @returns {Contest} The contest object.
+ * Adds a new contest via the backend service.
  */
-const fromFirestore = (doc: DocumentData): Contest => {
-  const data = doc.data();
-  return {
-    id: doc.id,
-    title: data.title,
-    startTime: (data.startTime as Timestamp).toDate(),
-    endTime: (data.endTime as Timestamp).toDate(),
-    levels: data.levels,
-    createdAt: data.createdAt ? (data.createdAt as Timestamp).toDate() : new Date(),
-  } as Contest;
+export const addContest = async (contestData: Omit<Contest, 'id' | 'createdAt'>) => {
+    try {
+        const headers = await getAuthHeader();
+        const response = await axios.post(`${BACKEND_URL}/api/admin/addContest`, contestData, { headers });
+        return response.data;
+    } catch(error: any) {
+        console.error("Error adding contest:", error.response?.data || error.message);
+        throw error;
+    }
 };
 
 /**
- * Adds a new contest to Firestore.
- *
- * Example usage:
- * const newContest = { title: 'New Contest', ... };
- * const contestId = await addContest(newContest);
+ * Updates an existing contest via the backend service.
  */
-export const addContest = (contestData: Omit<Contest, 'id' | 'createdAt'>) => {
-  const newContestData = {
-    ...contestData,
-    startTime: Timestamp.fromDate(contestData.startTime),
-    endTime: Timestamp.fromDate(contestData.endTime),
-    createdAt: serverTimestamp(),
-  };
-
-  return addDoc(contestsCollection, newContestData).catch(async (serverError) => {
-    const permissionError = new FirestorePermissionError({
-      path: contestsCollection.path,
-      operation: 'create',
-      requestResourceData: newContestData,
-    });
-    errorEmitter.emit('permission-error', permissionError);
-    throw serverError; // Re-throw for the caller to handle if needed
-  });
+export const updateContest = async (id: string, contestData: Partial<Contest>) => {
+    try {
+        const headers = await getAuthHeader();
+        const response = await axios.put(`${BACKEND_URL}/api/admin/updateContest/${id}`, contestData, { headers });
+        return response.data;
+    } catch(error: any) {
+        console.error("Error updating contest:", error.response?.data || error.message);
+        throw error;
+    }
 };
 
 /**
- * Updates an existing contest in Firestore.
- *
- * Example usage:
- * const updatedData = { title: 'Updated Title' };
- * await updateContest('contestId123', updatedData);
+ * Deletes a contest via the backend service.
  */
-export const updateContest = (id: string, contestData: Partial<Contest>) => {
-  const contestRef = doc(db, 'contests', id);
-  const dataToUpdate: Partial<any> = { ...contestData };
-
-  if (contestData.startTime) {
-    dataToUpdate.startTime = Timestamp.fromDate(new Date(contestData.startTime));
-  }
-  if (contestData.endTime) {
-    dataToUpdate.endTime = Timestamp.fromDate(new Date(contestData.endTime));
-  }
-
-  return updateDoc(contestRef, dataToUpdate).catch(async (serverError) => {
-    const permissionError = new FirestorePermissionError({
-      path: contestRef.path,
-      operation: 'update',
-      requestResourceData: dataToUpdate,
-    });
-    errorEmitter.emit('permission-error', permissionError);
-    throw serverError;
-  });
+export const deleteContest = async (id: string) => {
+    try {
+        const headers = await getAuthHeader();
+        const response = await axios.delete(`${BACKEND_URL}/api/admin/deleteContest/${id}`, { headers });
+        return response.data;
+    } catch(error: any) {
+        console.error("Error deleting contest:", error.response?.data || error.message);
+        throw error;
+    }
 };
 
 
 /**
- * Deletes a contest from Firestore.
- *
- * Example usage:
- * await deleteContest('contestId123');
- */
-export const deleteContest = (id: string) => {
-    const contestRef = doc(db, 'contests', id);
-    return deleteDoc(contestRef).catch(async (serverError) => {
-        const permissionError = new FirestorePermissionError({
-            path: contestRef.path,
-            operation: 'delete',
-        });
-        errorEmitter.emit('permission-error', permissionError);
-        throw serverError;
-    });
-};
-
-
-/**
- * Fetches a single contest from Firestore.
- *
- * Example usage:
- * const contest = await getContest('contestId123');
+ * Fetches a single contest from the backend.
  */
 export const getContest = async (id: string): Promise<Contest | null> => {
-  const contestRef = doc(db, 'contests', id);
   try {
-    const contestSnap = await getDoc(contestRef);
-    if (contestSnap.exists()) {
-      return fromFirestore(contestSnap);
+    const response = await axios.get(`${BACKEND_URL}/api/contests/${id}`);
+    const contest = response.data;
+    // Firestore timestamps are serialized, convert them back to Dates
+    return {
+        ...contest,
+        startTime: new Date(contest.startTime._seconds * 1000),
+        endTime: new Date(contest.endTime._seconds * 1000),
+    };
+  } catch (error: any) {
+    console.error("Error fetching contest:", error.response?.data || error.message);
+    if (error.response?.status === 404) {
+        return null;
     }
-    return null;
-  } catch (serverError: any) {
-    const permissionError = new FirestorePermissionError({
-        path: contestRef.path,
-        operation: 'get',
-    });
-    errorEmitter.emit('permission-error', permissionError);
-    throw serverError;
-  }
-};
-
-
-/**
- * Fetches all contests from Firestore.
- *
- * Example usage:
- * const contests = await getAllContests();
- */
-export const getAllContests = async (): Promise<Contest[]> => {
-  const q = query(contestsCollection, orderBy('startTime', 'desc'));
-  try {
-    const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(fromFirestore);
-  } catch(serverError: any) {
-     const permissionError = new FirestorePermissionError({
-        path: contestsCollection.path,
-        operation: 'list',
-    });
-    errorEmitter.emit('permission-error', permissionError);
-    throw serverError;
+    throw error;
   }
 };
 
 
 /**
  * Listens for real-time updates on all contests.
- *
- * Example usage:
- * const unsubscribe = listenToContests(contests => {
- *   console.log(contests);
- * });
- * // Later, to stop listening:
- * unsubscribe();
+ * NOTE: This still uses Firestore client SDK for real-time updates.
+ * For a full backend approach, this would be replaced with WebSockets or polling.
  */
 export const listenToContests = (
   callback: (contests: Contest[]) => void
 ): (() => void) => {
+  const contestsCollection = collection(db, 'contests');
   const q = query(contestsCollection, orderBy('startTime', 'desc'));
   const unsubscribe = onSnapshot(
     q,
     (querySnapshot) => {
-      const contests = querySnapshot.docs.map(fromFirestore);
+      const contests = querySnapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            id: doc.id,
+            ...data,
+            startTime: (data.startTime as Timestamp).toDate(),
+            endTime: (data.endTime as Timestamp).toDate(),
+          }
+      }) as Contest[];
       callback(contests);
     },
     (serverError) => {
