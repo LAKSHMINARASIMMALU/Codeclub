@@ -159,57 +159,69 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
 
     let submissionStatus: 'Passed' | 'Failed' | 'Pending' = 'Pending';
     let calculatedScore = 0;
+    let testCases: { input: any; output: any }[];
     
     try {
-        const testCases: { input: any; output: any }[] = JSON.parse(question.hiddenTestCases || '[]');
-        if (testCases.length === 0) {
-            toast({
-                variant: 'destructive',
-                title: 'No Test Cases',
-                description: 'This question has no hidden test cases configured.',
-            });
-            setIsSubmitting(false);
-            return;
-        }
-
-        let passedCount = 0;
-        const results: TestResult[] = [];
-        for (const tc of testCases) {
-            const expectedOutput = String(tc.output).trim();
-            const result = await runCodeWithCloudFunction(code, String(tc.input));
-            
-            const actualOutput = result.output ? result.output.trim() : null;
-            const passes = !result.error && actualOutput === expectedOutput;
-
-            if (passes) {
-                passedCount++;
-            }
-            results.push({
-                passed: passes,
-                input: String(tc.input),
-                expected: expectedOutput,
-                actual: actualOutput ?? "No output",
-                error: result.error
-            });
-        }
-        setTestResults(results);
+      try {
+        testCases = JSON.parse(question.hiddenTestCases || '[]');
+      } catch (error) {
+        toast({
+          variant: 'destructive',
+          title: 'Configuration Error',
+          description: 'The hidden test cases for this question are formatted incorrectly. Please contact an admin.',
+        });
+        setIsSubmitting(false);
+        return;
+      }
         
-        if (passedCount === testCases.length) {
-          submissionStatus = 'Passed';
-          calculatedScore = TOTAL_SCORE_PER_QUESTION;
-           toast({
-            title: "Submission successful!",
-            description: "All hidden test cases passed.",
+      if (testCases.length === 0) {
+          toast({
+              variant: 'destructive',
+              title: 'No Test Cases',
+              description: 'This question has no hidden test cases configured.',
           });
-        } else {
-            submissionStatus = 'Failed';
-            calculatedScore = Math.round((passedCount / testCases.length) * TOTAL_SCORE_PER_QUESTION);
-             toast({
-                variant: 'destructive',
-                title: "Submission failed",
-                description: `${passedCount} out of ${testCases.length} test cases passed.`,
-            });
-        }
+          setIsSubmitting(false);
+          return;
+      }
+
+      let passedCount = 0;
+      const results: TestResult[] = [];
+      for (const tc of testCases) {
+          const expectedOutput = String(tc.output).trim();
+          const result = await runCodeWithCloudFunction(code, String(tc.input));
+          
+          const actualOutput = result.output ? result.output.trim() : null;
+          const passes = !result.error && actualOutput === expectedOutput;
+
+          if (passes) {
+              passedCount++;
+          }
+          results.push({
+              passed: passes,
+              input: String(tc.input),
+              expected: expectedOutput,
+              actual: actualOutput ?? "No output",
+              error: result.error
+          });
+      }
+      setTestResults(results);
+      
+      if (passedCount === testCases.length) {
+        submissionStatus = 'Passed';
+        calculatedScore = TOTAL_SCORE_PER_QUESTION;
+         toast({
+          title: "Submission successful!",
+          description: "All hidden test cases passed.",
+        });
+      } else {
+          submissionStatus = 'Failed';
+          calculatedScore = Math.round((passedCount / testCases.length) * TOTAL_SCORE_PER_QUESTION);
+           toast({
+              variant: 'destructive',
+              title: "Submission failed",
+              description: `${passedCount} out of ${testCases.length} test cases passed.`,
+          });
+      }
 
     } catch (error: any) {
       console.error("Submission error:", error);
@@ -351,3 +363,5 @@ export function CodeEditor({ question, contestId, user }: CodeEditorProps) {
     </div>
   );
 }
+
+    
